@@ -52,7 +52,7 @@ func main() {
 		if re.MatchString(req.URL.String()) {
 			var unmarshed_json_post_data map[string]interface{}
 
-			if (req.Method == "POST" || req.Method == "PUT" || req.Method == "PATCH") && req.ContentLength > 0 {
+			if (req.Method == "POST" || req.Method == "PUT" || req.Method == "PATCH" || req.Method == "DELETE") && req.ContentLength > 0 {
 				buffer, err := ioutil.ReadAll(req.Body) // Reads the body
 
 				if err != nil {
