@@ -52,7 +52,7 @@ func main() {
 		if re.MatchString(req.URL.String()) {
 			var unmarshed_json_post_data map[string]interface{}
 
-			if req.Method == "POST" && req.ContentLength > 0 {
+			if (req.Method == "POST" || req.Method == "PUT" || req.Method == "PATCH") && req.ContentLength > 0 {
 				buffer, err := ioutil.ReadAll(req.Body) // Reads the body
 
 				if err != nil {
@@ -69,8 +69,6 @@ func main() {
 				req.Body = ioutil.NopCloser(bytes.NewBuffer(buffer))
 			}
 
-			// call the script using otto and pass the data through
-			// vm.Call("voryposplugin_handler", nil, req.Method, req.URL.String(), unmarshed_json_post_data)
 			unmarshed_json_post_data_string, err := json.Marshal(unmarshed_json_post_data)
 
 			if err != nil {
