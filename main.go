@@ -4,24 +4,66 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
 	"regexp"
+
+	"crypto"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/pem"
 
 	"gopkg.in/elazarl/goproxy.v1"
 )
 
 // find a way to load an interceptor
 type Config struct {
-	Pattern    string `json:"pattern"`
-	PluginPath string `json:"plugin_path"`
+	Pattern         string `json:"pattern"`
+	PluginPath      string `json:"path"`
+	PluginName      string `json:"name"`
+	PluginVersion   string `json:"version"`
+	PluginSignature string `json:"signature"`
 }
 
-func main() {
+// VerifyRSASignature verifies the RSA signature using the public key
+func VerifyRSASignature(message, signature []byte, publicKeyPEM string) bool {
+	// Parse the public key
+	block, _ := pem.Decode([]byte(publicKeyPEM))
+	if block == nil || block.Type != "PUBLIC KEY" {
+		return false
+	}
+
+	pubKey, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return false
+	}
+
+	rsaPubKey, ok := pubKey.(*rsa.PublicKey)
+	if !ok {
+		return false
+	}
+
+	// Hash the message
+	hash := sha256.New()
+	hash.Write(message)
+	hashed := hash.Sum(nil)
+
+	// Verify the signature using PSS
+	err = rsa.VerifyPSS(rsaPubKey, crypto.SHA256, hashed, signature, &rsa.PSSOptions{
+		SaltLength: rsa.PSSSaltLengthAuto, // Automatically determine salt length
+		Hash:       crypto.SHA256,
+	})
+
+	return err == nil
+}
+
+func (vservice *VoryPayPluginService) RunProxy() {
 	// read the config.json file
-	config_file, err := ioutil.ReadFile("config.json")
+	config_file, err := os.ReadFile("config.json")
 
 	if err != nil {
 		log.Fatal(err)
@@ -34,6 +76,23 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	// confirm that the signature of the script matches
+	// script, err := os.ReadFile(config.PluginPath)
+
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
+
+	// signature, err := base64.StdEncoding.DecodeString(config.PluginSignature)
+
+	// if err != nil {
+	// 	log.Fatal("Error decoding signature:", err)
+	// }
+
+	// if !VerifyRSASignature(script, signature, `-----BEGIN PUBLIC KEY-----`) {
+	// 	log.Fatal("Invalid plugin signature")
+	// }
 
 	setCA(caCert, caKey)
 
@@ -53,7 +112,7 @@ func main() {
 			var unmarshed_json_post_data map[string]interface{}
 
 			if (req.Method == "POST" || req.Method == "PUT" || req.Method == "PATCH" || req.Method == "DELETE") && req.ContentLength > 0 {
-				buffer, err := ioutil.ReadAll(req.Body) // Reads the body
+				buffer, err := io.ReadAll(req.Body) // Reads the body
 
 				if err != nil {
 					return req, nil
@@ -66,7 +125,7 @@ func main() {
 				}
 
 				// IMPORTANT: Reset the body since ioutil.ReadAll consumes the body
-				req.Body = ioutil.NopCloser(bytes.NewBuffer(buffer))
+				req.Body = io.NopCloser(bytes.NewBuffer(buffer))
 			}
 
 			unmarshed_json_post_data_string, err := json.Marshal(unmarshed_json_post_data)
@@ -74,6 +133,9 @@ func main() {
 			if err != nil {
 				return req, nil
 			}
+
+			// Execute the plugin
+			fmt.Println("Executing plugin: ", config.PluginName, " version: ", config.PluginVersion, " signature: ", config.PluginSignature)
 
 			cmd := exec.Command("deno", "run", config.PluginPath, req.Method, req.URL.String(), string(unmarshed_json_post_data_string))
 
@@ -86,4 +148,8 @@ func main() {
 	})
 
 	log.Fatal(http.ListenAndServe(":8080", proxy))
+}
+
+func main() {
+	ExecuteService()
 }
