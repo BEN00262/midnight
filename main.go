@@ -7,9 +7,9 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"os/exec"
 	"regexp"
 
-	"github.com/robertkrimen/otto"
 	"gopkg.in/elazarl/goproxy.v1"
 )
 
@@ -35,21 +35,6 @@ func main() {
 		log.Fatal(err)
 	}
 
-	vm := otto.New()
-
-	// Load JavaScript code from a file
-	scriptContent, err := ioutil.ReadFile(config.PluginPath)
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	_, err = vm.Run(string(scriptContent))
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
 	setCA(caCert, caKey)
 
 	proxy := goproxy.NewProxyHttpServer()
@@ -65,29 +50,38 @@ func main() {
 
 		// Check if the request URL matches the impactrooms domain
 		if re.MatchString(req.URL.String()) {
-			var jsonData map[string]interface{}
+			var unmarshed_json_post_data map[string]interface{}
 
 			if req.Method == "POST" && req.ContentLength > 0 {
 				buffer, err := ioutil.ReadAll(req.Body) // Reads the body
+
 				if err != nil {
 					return req, nil
 				}
 
 				// Unmarshal body into dynamic JSON (map[string]interface{})
-				err = json.Unmarshal(buffer, &jsonData)
+				err = json.Unmarshal(buffer, &unmarshed_json_post_data)
 				if err != nil {
 					return req, nil
 				}
-
-				// Print the dynamic JSON object
-				fmt.Printf("Parsed JSON: %s %s %#v\n", req.Method, req.URL.String(), jsonData)
 
 				// IMPORTANT: Reset the body since ioutil.ReadAll consumes the body
 				req.Body = ioutil.NopCloser(bytes.NewBuffer(buffer))
 			}
 
 			// call the script using otto and pass the data through
-			vm.Call("voryposplugin_handler", nil, req.Method, req.URL.String(), jsonData)
+			// vm.Call("voryposplugin_handler", nil, req.Method, req.URL.String(), unmarshed_json_post_data)
+			unmarshed_json_post_data_string, err := json.Marshal(unmarshed_json_post_data)
+
+			if err != nil {
+				return req, nil
+			}
+
+			cmd := exec.Command("deno", "run", config.PluginPath, req.Method, req.URL.String(), string(unmarshed_json_post_data_string))
+
+			if output, err := cmd.CombinedOutput(); err == nil {
+				fmt.Println(string(output))
+			}
 		}
 
 		return req, nil
