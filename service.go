@@ -1,170 +1,67 @@
 package main
 
 import (
-	"fmt"
-	"log"
 	"os"
-	"time"
+	"os/signal"
+	"syscall"
 
-	"golang.org/x/sys/windows/svc"
-	"golang.org/x/sys/windows/svc/eventlog"
-	"golang.org/x/sys/windows/svc/mgr"
+	"github.com/takama/daemon"
 )
 
 const (
-	SERVICE_NAME = "VoryPayPluginService"
+
+	// name of the service
+	name        = SERVICE_NAME
+	description = SERVICE_dESCRIPTION
 )
 
-type VoryPayPluginService struct {
-	quit chan struct{}
+// dependencies that are NOT required by the service, but might be used
+var dependencies = []string{}
+
+// Service has embedded daemon
+type Service struct {
+	daemon.Daemon
 }
 
-func (m *VoryPayPluginService) Execute(args []string, req <-chan svc.ChangeRequest, status chan<- svc.Status) (bool, uint32) {
-	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown
-	status <- svc.Status{State: svc.StartPending}
+// Manage by daemon commands or run the daemon
+func (service *Service) Manage() (string, error) {
 
-	// Create a channel to handle service shutdown
-	m.quit = make(chan struct{})
+	usage := "Usage: myservice install | remove | start | stop | status"
 
-	// Start the HTTP server in a separate goroutine
-	go m.RunProxy()
-
-	status <- svc.Status{State: svc.Running, Accepts: cmdsAccepted}
-
-	el, err := eventlog.Open(SERVICE_NAME)
-	if err != nil {
-		return false, 1
-	}
-	defer el.Close()
-
-	el.Info(1, "VoryPayPluginService is running!")
-
-loop:
-	for {
-		select {
-		case c := <-req:
-			switch c.Cmd {
-			case svc.Interrogate:
-				status <- c.CurrentStatus
-			case svc.Stop, svc.Shutdown:
-				el.Info(1, "VoryPayPluginService is stopping!")
-				close(m.quit) // Signal the HTTP server to stop
-				break loop
-			default:
-				el.Error(1, fmt.Sprintf("unexpected control request #%d", c))
-			}
-		default:
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-
-	status <- svc.Status{State: svc.StopPending}
-	return false, 0
-}
-
-func ExecuteService() {
-	isInteractive, err := svc.IsWindowsService()
-
-	if err != nil {
-		log.Fatalf("failed to determine if we are running in an interactive session: %v", err)
-	}
-
-	if !isInteractive {
-		runService(SERVICE_NAME, false)
-		return
-	}
-
-	// If running interactively, simply install the service
+	// if received any kind of command, do it
 	if len(os.Args) > 1 {
-		switch os.Args[1] {
+		command := os.Args[1]
+		switch command {
 		case "install":
-			err = installService(SERVICE_NAME, "My Go Windows Service with HTTP Server")
+			return service.Install()
+
 		case "remove":
-			err = removeService(SERVICE_NAME)
+			return service.Remove()
+
+		case "start":
+			return service.Start()
+
+		case "stop":
+			return service.Stop()
+
+		case "status":
+			return service.Status()
+
+		default:
+			return usage, nil
 		}
-		if err != nil {
-			log.Fatalf("Failed to handle service: %v", err)
-		}
-	} else {
-		log.Println("Usage: go run main.go <install|remove>")
-	}
-}
-
-func runService(name string, isDebug bool) {
-	err := eventlog.InstallAsEventCreate(name, eventlog.Error|eventlog.Warning|eventlog.Info)
-
-	if err != nil {
-		log.Fatalf("Event log install failed: %v", err)
 	}
 
-	err = svc.Run(name, &VoryPayPluginService{})
+	// Do something, call your goroutines, etc
 
-	if err != nil {
-		log.Fatalf("Service failed: %v", err)
-	}
-}
+	// Set up channel on which to send signal notifications.
+	// We must use a buffered channel or risk missing the signal
+	// if we're not ready to receive when the signal is sent.
+	interrupt := make(chan os.Signal, 1)
+	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
 
-func installService(name, displayName string) error {
-	m, err := mgr.Connect()
-	if err != nil {
-		return fmt.Errorf("could not connect to service manager: %v", err)
-	}
-	defer m.Disconnect()
+	RunProxy()
 
-	s, err := m.OpenService(name)
-	if err == nil {
-		s.Close()
-		return fmt.Errorf("service %s already exists", name)
-	}
-
-	config := mgr.Config{
-		DisplayName: displayName,
-		StartType:   mgr.StartAutomatic,
-	}
-	exePath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("could not get executable path: %v", err)
-	}
-
-	s, err = m.CreateService(name, exePath, config)
-	if err != nil {
-		return fmt.Errorf("could not create service: %v", err)
-	}
-	defer s.Close()
-
-	err = eventlog.InstallAsEventCreate(name, eventlog.Error|eventlog.Warning|eventlog.Info)
-	if err != nil {
-		s.Delete()
-		return fmt.Errorf("could not install event log source: %v", err)
-	}
-
-	log.Printf("Service %s installed successfully", name)
-	return nil
-}
-
-func removeService(name string) error {
-	m, err := mgr.Connect()
-	if err != nil {
-		return fmt.Errorf("could not connect to service manager: %v", err)
-	}
-	defer m.Disconnect()
-
-	s, err := m.OpenService(name)
-	if err != nil {
-		return fmt.Errorf("could not access service: %v", err)
-	}
-	defer s.Close()
-
-	err = s.Delete()
-	if err != nil {
-		return fmt.Errorf("could not delete service: %v", err)
-	}
-
-	err = eventlog.Remove(name)
-	if err != nil {
-		return fmt.Errorf("could not remove event log source: %v", err)
-	}
-
-	log.Printf("Service %s removed successfully", name)
-	return nil
+	// never happen, but need to complete code
+	return usage, nil
 }

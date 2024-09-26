@@ -17,7 +17,13 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 
+	"github.com/takama/daemon"
 	"gopkg.in/elazarl/goproxy.v1"
+)
+
+const (
+	SERVICE_NAME        = "VoryPayPluginServiceV0.0.1"
+	SERVICE_dESCRIPTION = "A sample description to see"
 )
 
 // find a way to load an interceptor
@@ -61,7 +67,7 @@ func VerifyRSASignature(message, signature []byte, publicKeyPEM string) bool {
 	return err == nil
 }
 
-func (vservice *VoryPayPluginService) RunProxy() {
+func RunProxy() {
 	// read the config.json file
 	config_file, err := os.ReadFile("config.json")
 
@@ -151,5 +157,18 @@ func (vservice *VoryPayPluginService) RunProxy() {
 }
 
 func main() {
-	ExecuteService()
+	srv, err := daemon.New(name, description, daemon.SystemDaemon, dependencies...)
+
+	if err != nil {
+		os.Exit(1)
+	}
+
+	service := &Service{srv}
+	status, err := service.Manage()
+
+	if err != nil {
+		os.Exit(1)
+	}
+
+	fmt.Println(status)
 }
