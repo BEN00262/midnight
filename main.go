@@ -143,7 +143,7 @@ func RunProxy() {
 			// Execute the plugin
 			fmt.Println("Executing plugin: ", config.PluginName, " version: ", config.PluginVersion, " signature: ", config.PluginSignature)
 
-			cmd := exec.Command("deno", "run", config.PluginPath, req.Method, req.URL.String(), string(unmarshed_json_post_data_string))
+			cmd := exec.Command("deno", "run", config.PluginPath, req.Method, req.URL.String(), "request", string(unmarshed_json_post_data_string))
 
 			if output, err := cmd.CombinedOutput(); err == nil {
 				fmt.Println(string(output))
@@ -151,6 +151,51 @@ func RunProxy() {
 		}
 
 		return req, nil
+	})
+
+	proxy.OnResponse().DoFunc(func(resp *http.Response, ctx *goproxy.ProxyCtx) *http.Response {
+		// Read the body content
+
+		re := regexp.MustCompile(config.Pattern)
+
+		// Check if the request URL matches the impactrooms domain
+		if re.MatchString(resp.Request.URL.String()) {
+			var unmarshed_json_post_data map[string]interface{}
+
+			if (resp.Request.Method == "POST" || resp.Request.Method == "PUT" || resp.Request.Method == "PATCH" || resp.Request.Method == "DELETE") && resp.Request.ContentLength > 0 {
+				buffer, err := io.ReadAll(resp.Body) // Reads the body
+
+				if err != nil {
+					return resp
+				}
+
+				// Unmarshal body into dynamic JSON (map[string]interface{})
+				err = json.Unmarshal(buffer, &unmarshed_json_post_data)
+				if err != nil {
+					return resp
+				}
+
+				// IMPORTANT: Reset the body since ioutil.ReadAll consumes the body
+				resp.Body = io.NopCloser(bytes.NewBuffer(buffer))
+			}
+
+			unmarshed_json_post_data_string, err := json.Marshal(unmarshed_json_post_data)
+
+			if err != nil {
+				return resp
+			}
+
+			// Execute the plugin
+			fmt.Println("Executing plugin: ", config.PluginName, " version: ", config.PluginVersion, " signature: ", config.PluginSignature)
+
+			cmd := exec.Command("deno", "run", config.PluginPath, resp.Request.Method, resp.Request.URL.String(), "response", string(unmarshed_json_post_data_string))
+
+			if output, err := cmd.CombinedOutput(); err == nil {
+				fmt.Println(string(output))
+			}
+		}
+
+		return resp
 	})
 
 	log.Fatal(http.ListenAndServe(":8080", proxy))
