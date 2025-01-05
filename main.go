@@ -198,7 +198,7 @@ func RunProxy() {
 		if re.MatchString(resp.Request.URL.String()) {
 			var unmarshed_json_post_data map[string]interface{}
 
-			if (resp.Request.Method == "POST" || resp.Request.Method == "PUT" || resp.Request.Method == "PATCH" || resp.Request.Method == "DELETE") && resp.Request.ContentLength > 0 {
+			if (resp.Request.Method == "POST" || resp.Request.Method == "PUT" || resp.Request.Method == "PATCH" || resp.Request.Method == "DELETE" || resp.Request.Method == "GET") && resp.Request.ContentLength > 0 {
 				buffer, err := io.ReadAll(resp.Body) // Reads the body
 
 				if err != nil {
