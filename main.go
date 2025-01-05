@@ -12,7 +12,9 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strings"
 
+	"github.com/tidwall/gjson"
 	"gopkg.in/elazarl/goproxy.v1"
 )
 
@@ -25,6 +27,51 @@ type Config struct {
 	PluginName      string `json:"name"`
 	PluginVersion   string `json:"version"`
 	PluginSignature string `json:"signature"`
+}
+
+func ExtractResponse(input, marker string) (string, error) {
+	start := strings.Index(input, marker)
+	if start == -1 {
+		return "", fmt.Errorf("no %s found", marker)
+	}
+
+	// Find the starting point of the JSON body
+	start += len(marker)
+	stack := 1
+	body := strings.Builder{}
+	body.WriteByte('{') // Append the opening curly brace
+
+	for i := start; i < len(input); i++ {
+		char := input[i]
+		if char == '{' {
+			stack++
+		} else if char == '}' {
+			stack--
+		}
+
+		// Append character to the buffer
+		body.WriteByte(char)
+
+		// Stop when all braces are matched
+		if stack == 0 {
+			return body.String(), nil
+		}
+	}
+
+	return "", fmt.Errorf("unmatched braces in input")
+}
+
+func ConvertToValidJSON(input string) string {
+	// Regex to find unquoted keys
+	re := regexp.MustCompile(`([a-zA-Z0-9_]+):`)
+
+	// Replace unquoted keys with quoted keys
+	output := re.ReplaceAllString(input, `"$1":`)
+
+	// Remove extra spaces (optional)
+	output = strings.TrimSpace(output)
+
+	return output
 }
 
 func RunProxy() {
@@ -135,7 +182,7 @@ func RunProxy() {
 					}
 				}
 
-				// fmt.Println(string(output))
+				fmt.Println(string(output))
 			}
 		}
 
@@ -174,9 +221,41 @@ func RunProxy() {
 				return resp
 			}
 
-			cmd := exec.Command("deno", "run", config.PluginPath, resp.Request.Method, resp.Request.URL.String(), "response", string(unmarshed_json_post_data_string))
+			plugin_content, err := ioutil.ReadFile(config.PluginPath)
+
+			if err != nil {
+				return resp
+			}
+
+			cmd := exec.Command("deno", "eval", string(plugin_content), resp.Request.Method, resp.Request.URL.String(), "response", string(unmarshed_json_post_data_string))
 
 			if output, err := cmd.CombinedOutput(); err == nil {
+				extracted_response, err := ExtractResponse(string(output), "@RESPONSE {")
+
+				if err != nil {
+					return resp
+				}
+
+				raw_body := ConvertToValidJSON(extracted_response)
+
+				raw_json_data, ok := gjson.Parse(raw_body).Value().(map[string]interface{})
+
+				if !ok {
+					return resp
+				}
+
+				if modified_json_body, err := json.Marshal(raw_json_data); err == nil {
+					modified_json_body_reader := bytes.NewReader(modified_json_body)
+
+					buffer := new(bytes.Buffer)
+
+					if _, err = buffer.ReadFrom(modified_json_body_reader); err == nil {
+
+						resp.Body = io.NopCloser(buffer)
+						resp.ContentLength = int64(buffer.Len())
+					}
+				}
+
 				fmt.Println(string(output))
 			}
 		}
