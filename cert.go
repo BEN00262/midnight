@@ -3,62 +3,24 @@ package main
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"log"
 
 	"gopkg.in/elazarl/goproxy.v1"
 )
 
-var caCert = []byte(`-----BEGIN CERTIFICATE-----
-MIIDazCCAlOgAwIBAgIUB1dhae+nAjW3QKaQWmfhyzt+0lQwDQYJKoZIhvcNAQEL
-BQAwRTELMAkGA1UEBhMCS0UxEzARBgNVBAgMClNvbWUtU3RhdGUxITAfBgNVBAoM
-GEludGVybmV0IFdpZGdpdHMgUHR5IEx0ZDAeFw0yNDA5MjYwNjQyNDBaFw0zNDA5
-MjQwNjQyNDBaMEUxCzAJBgNVBAYTAktFMRMwEQYDVQQIDApTb21lLVN0YXRlMSEw
-HwYDVQQKDBhJbnRlcm5ldCBXaWRnaXRzIFB0eSBMdGQwggEiMA0GCSqGSIb3DQEB
-AQUAA4IBDwAwggEKAoIBAQCe5uFlJnmUe791uDOsVzG6TMrpoiKwZy00RDFoYVIW
-FPz+MjeaUn7r6P053mGRRR3VB8ok5rQNHBskBJMVqzWxeviRAM4OIEMTjOaxPvSU
-32jhLVP81gfLRk+c5LM64fm573zm4m4BKshv9ZEfua30LN7/3AzLtgLg242SRn03
-OXlqZzXMQsSX6n11KfpuTIk3SPB7X/va7bURwSWPlQAbywkJ2YIRU4zzNdi8nJWu
-ZLsz47ugS3b2aYfPG0B3lapRr1RcbrK5CjfTiAqiKWOF/lJJrO8nfGonfA+fBTrZ
-BCWx4oalJ0JdntfY6sgRRXl+WjEVvsmVc//Alk3vl6obAgMBAAGjUzBRMB0GA1Ud
-DgQWBBS2kSc8VdhoolHTqZqHkFe3gEeoRzAfBgNVHSMEGDAWgBS2kSc8VdhoolHT
-qZqHkFe3gEeoRzAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQAi
-GbUoA2W6iXoEWdULW9gDI7Mdjd1W7xMyY/FN20Igg050Z/XBUWth5uO5aGUpUmKO
-24FeUct9HuDi0Ab3xxIVjq21mJQViNWeLgeG8bh/EC+WG8iGvKqqv4zhliZmRUmq
-lRm1zEWoKUoKNJZgTBWauD8ON9C7HDTF1z8g/qjWx9nZZ3rYVZewRMGriftG/cyk
-JK6C0BK4UIgdeHhla+PuN/bRCS0nlvSV/qFcttnwNTyOKlJLmO/I3h6a0McJIbdp
-ts53QPFF/W2choqnFupnHH+b7lLkw2yrnOVy6GBeOluGHhKasJH3q7SVcgx3cGVz
-jVWhYSV5h0ZHlkIAD19j
------END CERTIFICATE-----`)
+func setCA() error {
+	caCert, err := assets.ReadFile("assets/ca_cert.pem")
 
-var caKey = []byte(`-----BEGIN PRIVATE KEY-----
-MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCe5uFlJnmUe791
-uDOsVzG6TMrpoiKwZy00RDFoYVIWFPz+MjeaUn7r6P053mGRRR3VB8ok5rQNHBsk
-BJMVqzWxeviRAM4OIEMTjOaxPvSU32jhLVP81gfLRk+c5LM64fm573zm4m4BKshv
-9ZEfua30LN7/3AzLtgLg242SRn03OXlqZzXMQsSX6n11KfpuTIk3SPB7X/va7bUR
-wSWPlQAbywkJ2YIRU4zzNdi8nJWuZLsz47ugS3b2aYfPG0B3lapRr1RcbrK5CjfT
-iAqiKWOF/lJJrO8nfGonfA+fBTrZBCWx4oalJ0JdntfY6sgRRXl+WjEVvsmVc//A
-lk3vl6obAgMBAAECggEAIu5waDMQESMvEKrguScl6GWPSdL5uzvDRTUkg2S5jd8p
-SpwxevxdqHC8kicf3baK+1TODFSnCia+lKloyB+uGwkEcaPyqEpRVI/p+tbzH3MJ
-dE7porBOYFJhmATynaQlqMlL9NmcAyerjmk2cPn5kq72itqN+Y5WjaXWNmzGhAgG
-bN2OHOSbthyk1CiFFHyNDa8H0BFJqxkaXtTeGVx2QwcVPNsT7vhQmTH0UmJhu9y3
-1n+Bbd90HyPy4n4yZsFX9K0rSBiSiK3gcOqPegcoXt0x1ulKb0Pc4UWj+d2yK215
-3qFuAUrOp5LefuwSS6yThe07MyI3cZOWxJuvVWLuEQKBgQDc4zlG8RMadQilvlW1
-EYLS86IBTeZcPa0Sms860qVpEKMC99Nh5YWR8M+/6Ad525SR7JALHBR0FYRgqZMo
-jY9BrnXG8uSUqVYjw86TI4NuYPAgK7OMuAadNXN3Ij4QC0sPLd+PIaB5VdBSN78K
-jI5Q1tINWaFwZ5VULnmO6sirMwKBgQC4KTdwncNi8LautN5OaCYjL1co6GeXrrAl
-OpjFOSryFX3qPrm43EiGL5yITtbjUDOxB/AzjqEzIQFDZEXjMagvIuTUctXbJ/N1
-cKMo1op6u5XnaerKNw49TB0mb6J5Kc8ZQA6cs11HCt8Zb96DAlh2q3aQTDuUx9Iw
-rQZE7P5FeQKBgGNLzhLDCphpJhMEBhlYntvf4+L8NuMeYrArYZ8K1IrvjKgn6iFn
-AW2CuJGHZ9zyxc33byVfYR5yEck2Uc34HP8kwxNFW1Ys7Wk0e6ePXmT/NNLxckx+
-6ZJAVgCnJwklWn+fWpFIR5Bj8DsVjk7asptKhrCzqywRlIJ8Re7mQoEbAoGAU1ZL
-gUnTNj3J3Yt5oi+dOoTcw2VQI6LokSBQK8ev+HbjURJrhw0gQKDhDAnpUlpj2fPG
-rf4YUoPYB4Aj5Cj/e70lokIJJrCQio+bNgrIBbxHnL4ggruhVPnRoygXdQ8HadzE
-AANm7ZQs21z1a4GvOJxk/e2RdMVsB5z03lIEyrkCgYBXdpmo8MPpyZN06PU1De1I
-QspXyOY7K5ero6Ri3vszHOoxH9GliD3Ni1G2s8RUfSGi3mOMAMbAfgUhJRzG1Zbh
-D8RFOgUL3ZFjB0NXQ4XUrvUusBrDF6+elH0HWN0C9JBJtksvoVuY0kfwVK5PlpJW
-t7Kgz4bAXKEiR5CPWHVz8Q==
------END PRIVATE KEY-----`)
+	if err != nil {
+		log.Fatal(err)
+	}
 
-func setCA(caCert, caKey []byte) error {
+	caKey, err := assets.ReadFile("assets/ca_key.pem")
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	goproxyCa, err := tls.X509KeyPair(caCert, caKey)
 	if err != nil {
 		return err
@@ -71,5 +33,6 @@ func setCA(caCert, caKey []byte) error {
 	goproxy.MitmConnect = &goproxy.ConnectAction{Action: goproxy.ConnectMitm, TLSConfig: goproxy.TLSConfigFromCA(&goproxyCa)}
 	goproxy.HTTPMitmConnect = &goproxy.ConnectAction{Action: goproxy.ConnectHTTPMitm, TLSConfig: goproxy.TLSConfigFromCA(&goproxyCa)}
 	goproxy.RejectConnect = &goproxy.ConnectAction{Action: goproxy.ConnectReject, TLSConfig: goproxy.TLSConfigFromCA(&goproxyCa)}
+
 	return nil
 }

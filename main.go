@@ -2,31 +2,23 @@ package main
 
 import (
 	"bytes"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"regexp"
 
-	"crypto"
-	"crypto/rsa"
-	"crypto/sha256"
-	"crypto/x509"
-	"encoding/pem"
-
-	"github.com/takama/daemon"
 	"gopkg.in/elazarl/goproxy.v1"
 )
 
-const (
-	SERVICE_NAME        = "VoryPayPluginServiceV0.0.1"
-	SERVICE_dESCRIPTION = "A sample description to see"
-)
+//go:embed assets/*
+var assets embed.FS
 
-// find a way to load an interceptor
 type Config struct {
 	Pattern         string `json:"pattern"`
 	PluginPath      string `json:"path"`
@@ -35,41 +27,12 @@ type Config struct {
 	PluginSignature string `json:"signature"`
 }
 
-// VerifyRSASignature verifies the RSA signature using the public key
-func VerifyRSASignature(message, signature []byte, publicKeyPEM string) bool {
-	// Parse the public key
-	block, _ := pem.Decode([]byte(publicKeyPEM))
-	if block == nil || block.Type != "PUBLIC KEY" {
-		return false
-	}
-
-	pubKey, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		return false
-	}
-
-	rsaPubKey, ok := pubKey.(*rsa.PublicKey)
-	if !ok {
-		return false
-	}
-
-	// Hash the message
-	hash := sha256.New()
-	hash.Write(message)
-	hashed := hash.Sum(nil)
-
-	// Verify the signature using PSS
-	err = rsa.VerifyPSS(rsaPubKey, crypto.SHA256, hashed, signature, &rsa.PSSOptions{
-		SaltLength: rsa.PSSSaltLengthAuto, // Automatically determine salt length
-		Hash:       crypto.SHA256,
-	})
-
-	return err == nil
-}
-
 func RunProxy() {
 	// read the config.json file
-	config_file, err := os.ReadFile("config.json")
+	// this should be read from a manifest thats downloaded from a remote repository
+	// this is to ensure that the plugin is always up to date
+
+	config_file, err := assets.ReadFile("assets/config.json")
 
 	if err != nil {
 		log.Fatal(err)
@@ -83,24 +46,7 @@ func RunProxy() {
 		log.Fatal(err)
 	}
 
-	// confirm that the signature of the script matches
-	// script, err := os.ReadFile(config.PluginPath)
-
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
-
-	// signature, err := base64.StdEncoding.DecodeString(config.PluginSignature)
-
-	// if err != nil {
-	// 	log.Fatal("Error decoding signature:", err)
-	// }
-
-	// if !VerifyRSASignature(script, signature, `-----BEGIN PUBLIC KEY-----`) {
-	// 	log.Fatal("Invalid plugin signature")
-	// }
-
-	setCA(caCert, caKey)
+	setCA()
 
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.Verbose = false
@@ -140,13 +86,56 @@ func RunProxy() {
 				return req, nil
 			}
 
-			// Execute the plugin
-			fmt.Println("Executing plugin: ", config.PluginName, " version: ", config.PluginVersion, " signature: ", config.PluginSignature)
+			// read the plugin file
+			// this means we can pull this from a remote repository - run logic on whose scripts are run there
 
-			cmd := exec.Command("deno", "run", config.PluginPath, req.Method, req.URL.String(), "request", string(unmarshed_json_post_data_string))
+			plugin_content, err := ioutil.ReadFile(config.PluginPath)
+
+			if err != nil {
+				return req, nil
+			}
+
+			// only allowed perms is the network access
+			cmd := exec.Command("deno", "eval", string(plugin_content), req.Method, req.URL.String(), "request", string(unmarshed_json_post_data_string))
 
 			if output, err := cmd.CombinedOutput(); err == nil {
-				fmt.Println(string(output))
+				body_detector := regexp.MustCompile(`@BODY\s*{\s*([^}]*)\s*}`)
+
+				// Find the match
+				body_matches := body_detector.FindStringSubmatch(string(output))
+
+				if len(body_matches) > 0 {
+					raw_body := body_matches[1]
+
+					re := regexp.MustCompile(`\s*([a-zA-Z0-9_]+):\s*"([^"]+)"`)
+
+					// Find all matches
+					matches := re.FindAllStringSubmatch(raw_body, -1)
+
+					// Create a map to store the dynamic structure
+					raw_json_data := make(map[string]string)
+
+					// Iterate through matches to extract keys
+					for _, match := range matches {
+						if len(match) > 1 {
+							raw_json_data[match[1]] = match[2]
+						}
+					}
+
+					if modified_json_body, err := json.Marshal(raw_json_data); err == nil {
+						modified_json_body_reader := bytes.NewReader(modified_json_body)
+
+						buffer := new(bytes.Buffer)
+
+						if _, err = buffer.ReadFrom(modified_json_body_reader); err == nil {
+
+							req.Body = io.NopCloser(buffer)
+							req.ContentLength = int64(buffer.Len())
+						}
+					}
+				}
+
+				// fmt.Println(string(output))
 			}
 		}
 
@@ -185,9 +174,6 @@ func RunProxy() {
 				return resp
 			}
 
-			// Execute the plugin
-			fmt.Println("Executing plugin: ", config.PluginName, " version: ", config.PluginVersion, " signature: ", config.PluginSignature)
-
 			cmd := exec.Command("deno", "run", config.PluginPath, resp.Request.Method, resp.Request.URL.String(), "response", string(unmarshed_json_post_data_string))
 
 			if output, err := cmd.CombinedOutput(); err == nil {
@@ -198,22 +184,46 @@ func RunProxy() {
 		return resp
 	})
 
-	log.Fatal(http.ListenAndServe(":8080", proxy))
+	log.Fatal(http.ListenAndServe(":8888", proxy))
 }
 
 func main() {
-	srv, err := daemon.New(name, description, daemon.SystemDaemon, dependencies...)
+	// Disable proxy
+	defer EnableProxy(false, "", "")
+
+	// gather deno -- used to execute the plugins
+	install_deno_runtime()
+
+	caCert, err := assets.ReadFile("assets/ca_cert.pem")
 
 	if err != nil {
-		os.Exit(1)
+		log.Fatal(err)
 	}
 
-	service := &Service{srv}
-	status, err := service.Manage()
+	tempFile, err := os.CreateTemp("", "ca_cert-*.pem")
 
 	if err != nil {
-		os.Exit(1)
+		log.Fatal(err)
 	}
 
-	fmt.Println(status)
+	defer os.Remove(tempFile.Name()) // Clean up after use
+
+	if _, err = tempFile.Write(caCert); err != nil {
+		log.Fatal(err)
+	}
+
+	if err = AddCertToStore(tempFile.Name(), "ROOT", CERT_SYSTEM_STORE_CURRENT_USER); err != nil {
+		log.Fatal(err)
+	}
+
+	// Proxy settings
+	proxyAddress := "http://127.0.0.1:8888" // Replace with your proxy address
+	bypassList := "localhost;127.0.0.1"     // Optional bypass list
+
+	// Enable proxy
+	if err = EnableProxy(true, proxyAddress, bypassList); err != nil {
+		fmt.Printf("Error setting proxy: %v\n", err)
+	}
+
+	RunProxy()
 }
