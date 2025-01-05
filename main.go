@@ -198,20 +198,19 @@ func RunProxy() {
 		if re.MatchString(resp.Request.URL.String()) {
 			var unmarshed_json_post_data map[string]interface{}
 
-			if (resp.Request.Method == "POST" || resp.Request.Method == "PUT" || resp.Request.Method == "PATCH" || resp.Request.Method == "DELETE" || resp.Request.Method == "GET") && resp.Request.ContentLength > 0 {
+			if ((resp.Request.Method == "POST" || resp.Request.Method == "PUT" || resp.Request.Method == "PATCH" || resp.Request.Method == "DELETE") && resp.Request.ContentLength > 0) || resp.Request.Method == "GET" {
 				buffer, err := io.ReadAll(resp.Body) // Reads the body
 
 				if err != nil {
 					return resp
 				}
 
-				// Unmarshal body into dynamic JSON (map[string]interface{})
 				err = json.Unmarshal(buffer, &unmarshed_json_post_data)
+
 				if err != nil {
 					return resp
 				}
 
-				// IMPORTANT: Reset the body since ioutil.ReadAll consumes the body
 				resp.Body = io.NopCloser(bytes.NewBuffer(buffer))
 			}
 
