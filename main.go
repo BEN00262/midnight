@@ -41,11 +41,13 @@ var (
 )
 
 func isAnotherInstanceRunning() bool {
-	name := syscall.StringToUTF16Ptr("MySingleInstanceApp")
+	name := syscall.StringToUTF16Ptr("MidnightProxy")
 	handle, _, err := createMutexW.Call(0, 0, uintptr(unsafe.Pointer(name)))
+
 	if handle == 0 {
 		log.Fatalf("Failed to create mutex: %v", err)
 	}
+
 	lastErr, _, _ := getLastError.Call()
 	return lastErr == 183 // ERROR_ALREADY_EXISTS
 }
