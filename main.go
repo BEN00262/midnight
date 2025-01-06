@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"embed"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -11,9 +12,13 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
+	"unsafe"
 
+	"github.com/getlantern/systray"
 	"github.com/tidwall/gjson"
 	"gopkg.in/elazarl/goproxy.v1"
 )
@@ -27,6 +32,22 @@ type Config struct {
 	PluginName      string `json:"name"`
 	PluginVersion   string `json:"version"`
 	PluginSignature string `json:"signature"`
+}
+
+var (
+	kernel32     = syscall.NewLazyDLL("kernel32.dll")
+	createMutexW = kernel32.NewProc("CreateMutexW")
+	getLastError = kernel32.NewProc("GetLastError")
+)
+
+func isAnotherInstanceRunning() bool {
+	name := syscall.StringToUTF16Ptr("MySingleInstanceApp")
+	handle, _, err := createMutexW.Call(0, 0, uintptr(unsafe.Pointer(name)))
+	if handle == 0 {
+		log.Fatalf("Failed to create mutex: %v", err)
+	}
+	lastErr, _, _ := getLastError.Call()
+	return lastErr == 183 // ERROR_ALREADY_EXISTS
 }
 
 func ExtractResponse(input, marker string) (string, error) {
@@ -74,24 +95,10 @@ func ConvertToValidJSON(input string) string {
 	return output
 }
 
-func RunProxy() {
+func RunProxy(config Config) {
 	// read the config.json file
 	// this should be read from a manifest thats downloaded from a remote repository
 	// this is to ensure that the plugin is always up to date
-
-	config_file, err := assets.ReadFile("assets/config.json")
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// parse the config file
-	var config Config
-	err = json.Unmarshal(config_file, &config)
-
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	setCA()
 
@@ -265,9 +272,9 @@ func RunProxy() {
 	log.Fatal(http.ListenAndServe(":8888", proxy))
 }
 
-func main() {
+func SetupProxyAndRun(config Config) {
 	// Disable proxy
-	defer EnableProxy(false, "", "")
+	// defer EnableProxy(false, "", "")
 
 	// gather deno -- used to execute the plugins
 	install_deno_runtime()
@@ -303,5 +310,107 @@ func main() {
 		fmt.Printf("Error setting proxy: %v\n", err)
 	}
 
-	RunProxy()
+	RunProxy(config)
+}
+
+func GenerateRegex(domain string) (string, error) {
+	// Normalize the domain by trimming leading/trailing spaces and converting to lowercase
+	domain = strings.ToLower(strings.TrimSpace(domain))
+
+	// Validate the domain format using a basic regex
+	re := regexp.MustCompile(`^(https?://)?([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,6}$`)
+	if !re.MatchString(domain) {
+		return "", fmt.Errorf("invalid domain format")
+	}
+
+	// Split the domain by the '.' character to identify parts
+	parts := strings.Split(domain, ".")
+	if len(parts) < 2 {
+		return "", fmt.Errorf("invalid domain format")
+	}
+
+	// Extract the second-level domain (assumes that the last part is the TLD)
+	secondLevelDomain := parts[len(parts)-2]
+
+	// Create the regex string, replacing the second-level domain placeholder
+	regex := fmt.Sprintf(`^https?:\/\/([a-zA-Z0-9-]+\.)*%s\.[a-zA-Z]{2,6}\/?.*$`, secondLevelDomain)
+
+	return regex, nil
+}
+
+func main() {
+	// add flags to allow the user to specify the plugin path and domain
+	// this will allow the user to specify the plugin path and domain to run the plugin on
+	if isAnotherInstanceRunning() {
+		// Send the new config to the running instance
+		return
+	}
+
+	pluginPath := flag.String("plugin-path", "", "Path to the plugin file, should be a js file (required)")
+	domainPattern := flag.String("domain-pattern", "", "Domain pattern to match (required)")
+
+	flag.Parse()
+
+	if *pluginPath == "" || *domainPattern == "" {
+		fmt.Println("Both -plugin-path and -domain-pattern flags are required\nUsage:")
+
+		// print the help
+		flag.PrintDefaults()
+		return
+	}
+
+	flag.Parse()
+
+	// convert the plugin path to an absolute path
+	abs_plugin_path, err := filepath.Abs(*pluginPath)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// take the supplied domain and convert to this regex ^https?:\\/\\/([a-zA-Z0-9-]+\\.)*impactrooms\\.[a-zA-Z]{2,6}\\/?.*$
+	domain_pattern_regex_string, err := GenerateRegex(*domainPattern)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	config := Config{
+		Pattern:    domain_pattern_regex_string,
+		PluginPath: abs_plugin_path,
+	}
+
+	go func(config Config) { SetupProxyAndRun(config) }(config)
+
+	// Run the systray
+	systray.Run(onReady, onExit)
+}
+
+func onReady() {
+	// Set the icon (icon file must be in the same directory)
+	iconData, err := assets.ReadFile("assets/icon.ico") // Use PNG or ICO file
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	systray.SetIcon(iconData)
+	systray.SetTitle("Midnight Proxy")
+
+	// Set the tooltip
+	systray.SetTooltip("Midnight Proxy")
+
+	// Add menu items
+	quitItem := systray.AddMenuItem("Stop Proxy", "Stop the proxy")
+
+	// Handle menu item clicks in goroutines
+	go func() {
+		for range quitItem.ClickedCh {
+			systray.Quit()
+		}
+	}()
+}
+
+func onExit() {
+	EnableProxy(false, "", "")
 }

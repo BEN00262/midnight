@@ -1,2 +1,2 @@
 build:
-	go build -ldflags "-s -w" -o midnight.exe
+	go build -ldflags "-s -w -H windowsgui" -o midnight.exe
