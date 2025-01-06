@@ -111,25 +111,7 @@ func AddCertToStore(certPath string, storeName string, location uint32) error {
 	}
 
 	if CertExists(cert.Subject.String()) {
-		// Remove the certificate if we find a match
-		// get the cert context
-		certContext, err := windows.CertFindCertificateInStore(
-			store,
-			uint32(windows.X509_ASN_ENCODING),
-			0,
-			CERT_FIND_SERIAL_NUMBER,
-			unsafe.Pointer(&cert.SerialNumber.Bytes()[0]),
-			nil,
-		)
-
-		if err != nil {
-			return fmt.Errorf("failed to find certificate in store: %w", err)
-		}
-
-		// Remove the certificate if we find a match
-		if err := windows.CertDeleteCertificateFromStore(certContext); err != nil {
-			return fmt.Errorf("failed to delete existing certificate: %w", err)
-		}
+		return nil
 	}
 
 	// Convert to Windows CERT_CONTEXT
